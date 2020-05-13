@@ -1,0 +1,346 @@
+---
+title: "HarvardX Capstone Project: Biomechanical Features of Orthopedic Patients"
+author: Alec Banner
+output: pdf_document
+---
+
+# Introduction
+
+The goal of this project was to build a machine learning algorithm capable of predicting the presence of abnormalities in the spine given physical measurements of the body. The data set utilised, **Biomechanical Features of Orthopedic Patients**, was selected as it bares relevence to my area of research. It is also a small dataset which should allow me to build and test a range of machine learning algorithms, without the challenges faced so far due to working on a small laptop. 
+
+## Loading the Dataset
+
+The dataset is imported from github and then the 'readr' package used to read the data from the .csv file. 
+
+```{r echo = FALSE, warning=FALSE, message=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(gridExtra)) install.packages("gridExtra", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(e1071)) install.packages("e1071", repos = "http://cran.us.r-project.org")
+if(!require(gbm)) install.packages("gbm", repos = "http://cran.us.r-project.org")
+if(!require(gam)) install.packages("gam", repos = "http://cran.us.r-project.org")
+if(!require(rpart)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+
+urlfile <- "https://raw.githubusercontent.com/alecbanner/HarvardX-Capstone-2-Biomechanics/master/column_2C_weka.csv"
+column_2C_weka <- read_csv(url(urlfile))
+head(column_2C_weka)
+```
+
+## The Dataset
+
+The name of the 'pelvic_tilt numeric' column is long and contains spaces so will be renamed to just 'pelvic_tilt'.
+
+```{r echo = FALSE}
+column_2C_weka <- column_2C_weka %>% 
+  rename('pelvic_tilt' = 'pelvic_tilt numeric')
+```
+
+The dimmensions of the dataset show that it contains 310 enteries (rows) and 7 columns
+
+```{r echo = FALSE}
+dim(column_2C_weka)
+str(column_2C_weka)
+```
+
+Of the 7 columns, 6 contain numeric data, these will be our factors for machine learning. The last column is a character string containing the 'class' stating whether the patient was 'Normal' or 'Abnormal' in their spine. The 6 factors are: pelvic_incidence, pelvic_tilt, lumbar_lordosis_angle, sacral_slope, pelvic_radius and degree_spondylolisthesis. These are all physical measurements of a patient which have been taken by a doctor. The 'class' was redefined as a factor with two levels, this will make predicting machine learning outcomes easier and also means that when the dataset is split into training and testing set, the 'createDataPartition' function will automatically maintain the prevelence of each factor during the split. 
+
+```{r}
+column_2C_weka$class <- as.factor(column_2C_weka$class)
+```
+
+Finally, this is a dense dataframe and does not contain any NAs
+
+```{r echo = FALSE}
+apply(column_2C_weka, 2, function(x) any(is.na(x)))
+```
+
+## Exploring the Data
+
+```{r echo = FALSE}
+column_2C_weka %>%
+  group_by(class) %>%
+  ggplot(aes(class)) +
+  geom_bar() +
+  geom_label(stat='count',aes(label=..count..))
+```
+
+This plot shows that there are 210 'Abnormal' enteries and 100 'Normal' enteries in the dataset. Therefore, it is important to maintain this uneven prevelence when the data is split which will be done using the 'class' factors with the createDataPartition' function. 
+
+```{r echo = FALSE}
+h1 <- ggplot(column_2C_weka, aes(pelvic_incidence))+geom_histogram(binwidth = 5) 
+h2 <- ggplot(column_2C_weka, aes(pelvic_tilt))+geom_histogram(binwidth = 5) 
+h3 <- ggplot(column_2C_weka, aes(lumbar_lordosis_angle))+geom_histogram(binwidth = 5) 
+h4 <- ggplot(column_2C_weka, aes(sacral_slope))+geom_histogram(binwidth = 5) 
+h5 <- ggplot(column_2C_weka, aes(pelvic_radius))+geom_histogram(binwidth = 5) 
+h6 <- ggplot(column_2C_weka, aes(degree_spondylolisthesis))+geom_histogram(binwidth = 5)
+grid.arrange(h1,h2,h3,h4,h5,h6)
+```
+
+Histograms of each of the factors. These don't appear to be normally distributed which suggests that they are factors affected by 'class' as under normal circumstances they are measurements which we would predict would be normally distributed. Two of the factors, pelvic_tilt and pelvic_radius are however only slightly scewed from normal distribution so these may not be as stronger predictors and pelvic_incidence and degree_spondylolisthesis which are nearly bivarient normal, suggesting two normal distributionss, one for each factor. 
+
+```{r echo = FALSE}
+b1 <- ggplot(column_2C_weka, aes(class, pelvic_incidence)) + geom_boxplot()
+b2 <- ggplot(column_2C_weka, aes(class, pelvic_tilt)) + geom_boxplot()
+b3 <- ggplot(column_2C_weka, aes(class, lumbar_lordosis_angle)) + geom_boxplot()
+b4 <- ggplot(column_2C_weka, aes(class, sacral_slope)) + geom_boxplot()
+b5 <- ggplot(column_2C_weka, aes(class, pelvic_radius)) + geom_boxplot()
+b6 <- ggplot(column_2C_weka, aes(class, degree_spondylolisthesis)) + geom_boxplot()
+grid.arrange(b1, b2, b3, b4, b5, b6)
+```
+
+Boxplots of each factor by class, show that for each factor the average of the two classes is different. This would suggest that each will have predictive power. For all factors other than degree-spondylolisthesis however, the interquartile ranges overlap, so separating the 2 factors completely could be hard. 
+
+## Creating Training and Testing sets
+
+With machine learning it is importand to separate the training and test data to prevent overtraining. The trianing set will be used for building and optimising the machine learning algorithms and the testing set only used to assess the final model. This dataset will be split 80/20 with 80% of the data going into the training set. This ratio was selected as the dataset is relatively small. There are no set rules for how to split data, but in a very large dataset a 90/10 split, the 10% training data is still likely to be representative of the overal dataset. Here the dataset is relatively small so 80/20 will hopefully allow the test_set to be representative of the overal data whilst maintaining enough data in the trainging set for the algorithms to learn from. the data partition is carried out on 'class' meaning that prevelance of each factor will be maintained during the split.
+
+```{r warning=FALSE}
+#createdatapartitionbased on class(factor) to maintain ratios
+set.seed(1, sample.kind = "Rounding")
+test_index <- createDataPartition(y = column_2C_weka$class, times = 1, p =  0.2, list = FALSE)
+test_set <- column_2C_weka[test_index,]
+data <- column_2C_weka[-test_index,]
+#check the realative ratios are maintained
+mean(test_set$class == "Normal")
+mean(data$class == "Normal")
+#save the partitioned data
+save(test_set, file = "test_set.rdata")
+save(data, file = "data.rdata")
+```
+
+# Methods
+
+## Setting the seed
+
+Whenever random number generation is used, seed will be set to 1. This is so the results are reproducible.
+
+## Creating Training and Validation sets
+
+The Training data will undergo a second split in order to have a 'training' set and a 'validation' set. the 'training' set will be used to build and optimise the models and the 'validation' set used to assess how these preform and compare them. Again an 80/20 split will be used.
+
+```{r warning=FALSE}
+#split data into training and validation sets
+set.seed(1, sample.kind = "Rounding")
+test_index <- createDataPartition(y = data$class, times = 1, p = 0.2, list = FALSE)
+validation <- data[test_index,]
+training <- data[-test_index,]
+#check the ratios are maintained
+mean(validation$class == "Normal")
+mean(training$class == "Normal")
+#save the trainging and validation datasets
+save(validation, file = "validation.rdata")
+save(training, file = "training.rdata")
+```
+
+## The Caret package and TrainingControl
+
+The 'caret' package will be used to create the machine learning algorithms. The caret package is good as it takes a large number of different algorithms and runs them using the same syntax. Caret packages 'train' function automatically carries out cross validation on the dataset to estimate the accuracy. We will change cross validation method from the default to use 50 rounds of bootstrapping using 50% of the data. More rounds and larger percentage of the data should give more accurate estimates of accuracy as the dataset is small. As the dataset is small the processing time should still be acceptable. 
+
+```{r}
+#define cross validation method
+control <- trainControl(method = "boot", number = 50, p = 0.5)
+```
+
+## Logistic Regression
+
+The first model uses a generalise linear model (glm). This model applies regression to catagorical data as if the data were continuous. This is applied here as class is a factor with 2 levels and therefore the outcomes can be thought of as catagorical with outcomes of either 'Normal' or 'Abnormal'
+
+## K Nearest Nieghbours
+
+The second machine learning technique to be applied is K nearest neighbours (knn). This is a cross validation method which takes a point for which we want to predict the outcome, looks at the 'k' number of nearest points and takes the average of the outcomes, 'Normal' or 'Abnormal'. For this method the number of nearest neighbours to take into account for each prediction will be optimised by trying 'k's between 3 and 51. The optimum k will be used to test the final model. 
+
+## Loess Function 
+
+Local weighted regression (Loess) is similar to knn however rather than taking the average of the 'k' nearest points, an estimate of the slope of those points is used. This can help give a smoother approximation than by knn. For this, the 'gamLoess' method will be used. Both degree and span can be optimised however degree will be fixxed as 1 (linear), and span optimised between 10% and 90% of the data. 
+
+## Decision Tree
+
+Decision trees are powerful and popular machine learning alorithms. They use the data to define rules, if this then that, else this. The data is plit multiple times until the rules pool the remaining data in nodes with the same outcomes. This is easier to understand with an example:
+```{r echo = FALSE}
+fit <- rpart(class ~ ., data = training)
+plot(fit, margin = 0.1)
+text(fit, cex = 0.75)
+```
+
+This is a single decision tree built using the 'rpart' package for the 'training' data. The first split looks at degree_spondylolisthesis, id the values is above 10.85 then it is defined as 'Abnormal' else the next condition, sacral_slope, is assessed. In this example 6 splits are made until all the data is defined as either 'Normal' or 'Abnormal'. The problem with decision trees is that the binary nature of the splits makes rough boundries which poorly repressent the data.
+
+### Random Forests
+
+To overcome this algorithms will be built using the 'randomForest' function. This builds a large number of decision trees and averages them into the final model making it much smoother and more flexible. The method used here will be optimised for 'mtry' which is the number of variables sampled as candidates foreach split, with integers between 1 and 10. As a large number of trees are averaged, it is not possible to visualise trees in the same way as a decision tree, the imporance of each factor can be assessed however. This looks at how often an individual factor is used in trees. A factor used more often is more important than one used less often.
+
+## Gradient Boosted Model
+
+The final model is based on gradient boosting. Gradient boosting is similar to random forests in that they rely on the building of many decision trees, however in gradient boosting each tree is assessed. The next tree is built to try and improve on the previous tree by classifying observations which were not well predicted by the previous tree. The final model is a wieghted ensemble of all the previous trees. For this model the 'gbm' method will be used and optimised for: the number of trees built in 100s between 100 and 500; the interaction depth (number of splits) in each tree between 4 and 7. 6 is the default value and thought to generally perform well; shrinkage (learning rate) will be set to 0.01 as lower numbers can take a long time to process; and the minimum nodesize assessed for 3, 5 and 10, this is the minimum number of observations at each node to allow a split, 10 is typically used but small datasets may work better with smaller minnodes. 
+
+## Ensemble Model
+
+Finally and ensemble will be built by vote. Ensemble models aim to gain a better prediction by taking into account lots of models to predict the final outcome. In this case, for each observation the prediction of each algorithm is taken into account. The outcome with the most 'votes' will be the final outcome, either 'Normal' or 'Abnormal'. 
+
+## Final model
+
+The final model will be selected as the best performing of the model described. It will be trained on the entire training set (data) using the parameters optimised on the training and validation sets. It will then be used to make predictions on the test_set and the accuracy determined. 
+
+# Results
+
+## GLM
+
+```{r echo = FALSE, warning=FALSE}
+#Generalised linear model (logistic regression)
+train_glm <- train(class ~ ., data = training, method = "glm", trControl = control)
+glm_yhat <- predict(train_glm, validation)
+glm_con_mat <- confusionMatrix(glm_yhat, validation$class)
+glm_con_mat
+```
+
+The glm model gives an accuracy of `r glm_con_mat$overall[1]`.
+
+## KNN
+
+```{r echo = FALSE, warning=FALSE}
+#K Nearest Neighbours
+set.seed(1, sample.kind = "Rounding")
+train_knn <- train(class ~ . , data = training, method = "knn", tuneGrid = data.frame(k = seq(3, 51, 2)), trControl = control)
+ggplot(train_knn, highlight = TRUE)
+```
+
+From the plot of number of neighbours against estimated accuracy, we can see that a k of 13 gives the highest accuracy, therefore this is the value which will be used in the final model. 
+
+```{r echo = FALSE, warning=FALSE}
+knn_yhat <- predict(train_knn, validation)
+knn_con_mat <- confusionMatrix(knn_yhat, validation$class)
+knn_con_mat
+```
+
+Making predictions on the validation set, we estimate an accuracy of `r knn_con_mat$overall[1]`.
+
+## gamLoess
+
+```{r echo = FALSE, warning=FALSE}
+grid <- expand.grid(span = seq(0.1, 0.9, 0.05), degree = 1)
+set.seed(1, sample.kind = "Rounding")
+train_gamloess <- train(class~ ., data = training, method = "gamLoess", tuneGrid = grid, trControl = control)
+ggplot(train_gamloess, highlight = TRUE)
+```
+
+From the plot of span against estimated accuracy we can see that 85% gives the highest accuracy and will be used in the final model. 
+
+```{r echo = FALSE, warning=FALSE}
+gamloess_yhat <- predict(train_gamloess, validation)
+gamloess_con_mat <- confusionMatrix(gamloess_yhat, validation$class)
+gamloess_con_mat
+```
+
+The estimated accuracy of gamLoess on the validation set is `r gamloess_con_mat$overall[1]`.
+
+## Random Forest
+
+```{r echo = FALSE, warning=FALSE}
+#Random Forest
+set.seed(1, sample.kind = "Rounding")
+train_rf <- train(class~ ., data = training, method = "rf", tuneGrid = data.frame(mtry = c(1:10)), trControl = control)
+ggplot(train_rf, highlight = TRUE)
+```
+
+From the plot of mtry against accuracy we can see that a value of 3 gives the highest estimated accuracy and will be used in the final model.
+
+```{r echo = FALSE}
+plot(varImp(train_rf))
+```
+
+By plotting the importance of each factor in the final model we can see that degree_spondylolisthesis is by far the most important, followed by pelvic_radius and sacral_slope with pelvic_tilit and lumbar_lordosis_angle being relatively unimportant. 
+
+```{r echo = FALSE, warning=FALSE}
+rf_yhat <- predict(train_rf, validation)
+rf_con_mat <- confusionMatrix(rf_yhat, validation$class)
+rf_con_mat
+```
+
+The esitmated accuracy of the final rf model is `r rf_con_mat$overall[1]`.
+
+## GBM
+
+```{r echo = FALSE, warning=FALSE, include=FALSE}
+grid = expand.grid(.n.trees=seq(100,500, by=100), .interaction.depth=seq(4,7, by=1), .shrinkage = 0.01, .n.minobsinnode = c(3,5,10))
+set.seed(1, sample.kind = "Rounding")
+train_gbm <- train(class~., data = training, method = "gbm", tuneGrid = grid, trControl = control)
+```
+
+```{r echo=FALSE}
+ggplot(train_gbm, highlight = TRUE)
+```
+
+
+The plots of GBM tuning show that the optimised model used 100 trees, with and interaction depth of 6 and 10 nodes.
+
+```{r echo = FALSE, warning=FALSE}
+gbm_yhat <- predict(train_gbm, validation)
+gbm_con_mat <- confusionMatrix(gbm_yhat, validation$class)
+gbm_con_mat
+```
+
+The accuracy of the final gbm model on the validation set is `r gbm_con_mat$overall[1]`.
+
+## Ensemble Model
+
+```{r warning=FALSE}
+#Ensemble Model
+fits <- list(train_rf, train_gamloess, train_glm, train_knn, train_gbm)
+pred <- sapply(fits, function(object){
+  predict(object, validation)
+})
+colMeans(pred == validation$class)
+x <- rowMeans(pred == "Abnormal")
+ensemble_vote <- ifelse(x>0.5, "Abnormal", "Normal")
+ensemble_acc <- mean(ensemble_vote == validation$class)
+
+#Ensemble model 2
+fits <- list(train_gamloess, train_rf, train_gbm)
+pred <- sapply(fits, function(object){
+  predict(object, validation)
+})
+x <- rowMeans(pred == "Abnormal")
+ensemble_vote <- ifelse(x>0.5, "Abnormal", "Normal")
+ensemble_2_acc <- mean(ensemble_vote == validation$class)
+```
+
+The ensemble model built using the average vote across all models gave and overall accuracy of `r ensemble_acc`.
+This model performs worse than 3 of the models individually. Remaking the enemble to only include the gamLoess model, rf model and gbm model which all preformed better than the first ensemble giving an accuracy of `r ensemble_2_acc`.
+
+The second ensemble model will therefore be used as the final model.
+
+## Final Model
+
+```{r echo = FALSE, warning=FALSE, include=FALSE}
+#Final Model
+
+#gamLoess
+grid <- expand.grid(span = 0.85, degree = 1)
+set.seed(1, sample.kind = "Rounding")
+train_gamloess_final <- train(class~ ., data = data, method = "gamLoess", tuneGrid = grid, trControl = control)
+
+#Random Forest
+set.seed(1, sample.kind = "Rounding")
+train_rf_final <- train(class~ ., data = data, method = "rf", tuneGrid = data.frame(mtry = 3), trControl = control)
+
+
+#Gradient boosted model 
+grid = expand.grid(.n.trees=100, .interaction.depth=6, .shrinkage = 0.01, .n.minobsinnode = 10)
+set.seed(1, sample.kind = "Rounding")
+train_gbm_final <- train(class~., data = data, method = "gbm", tuneGrid = grid, trControl = control)
+
+#Ensemble
+fits <- list(train_gamloess_final, train_rf_final, train_gbm_final)
+pred <- sapply(fits, function(object){
+  predict(object, test_set)
+})
+x <- rowMeans(pred == "Abnormal")
+ensemble_vote <- ifelse(x>0.5, "Abnormal", "Normal")
+ensemble_final_acc <- mean(ensemble_vote == test_set$class)
+```
+
+The final model uses an ensemble vote model with: gamLoess with a span of 0.85, rf with a mtry of 3, and gbm with 100 trees, an interaction depth of 6 and minimum node size of 10. This gives an accuracy on the test_set, when training on data using the given parameters, of `r ensemble_final_acc`.
+
+# Conclusion
+
+This project successfully evaluated the estimated accuracy of 5  machine learning algorithms for their ability to predict normailty from the **Biomechanical Features of Orthopedic Patients** dataset. A final ensemble model was built using gamLoess, randomForest and Gradient Boosted models with optimised parameters. This final model had an accuracy of `r ensemble_final_acc` on the test_set. This appears to be a good model. Models which are not perfect can always be improved by further optimising the algorithms or assessing more machine learning methods for inclusion in the final ensemble model. One of the limitations of this project was the small dataset possibly gives a poor representation of the overall population. By including the measurements from more patients a more representative model could be built.
